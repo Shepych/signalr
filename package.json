@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@microsoft/signalr": "^8.0.7",
+    "dotenv": "^16.4.7"
+  }
+}
