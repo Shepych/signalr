@@ -236,7 +236,7 @@ async function run() {
     });
 }
 
-// НАШ СОКЕТ
+// SCOUT соет
 
 let wsClient;
 
@@ -246,24 +246,12 @@ function connectWebSocket() {
         closeOnBeforeunload: false,
     });
 
-    // socket.emit('connecting_to_match', { match_id: parseInt(app.matchId), api_key: "089ca38fa9b741db9ea4a66f3e71ed64"}, () => {})
     socket.emit('connecting_to_match', { match_id: 899761, api_key: "089ca38fa9b741db9ea4a66f3e71ed64", isScout: true}, () => {})
 
     socket.on('scout_authentication', (data) => {
         socketId = data.socket_id;
         console.log('scout_authentication') // При подключении сюда прилетает Socket ID
     })
-    // socket.on("connect", () => {
-    //     logger.info("Socket.IO подключение установлено");
-    // });
-    //
-    // socket.on("connect_error", (err) => {
-    //     logger.error(`Socket.IO ошибка: ${err.message}`);
-    // });
-    //
-    // socket.on("disconnect", () => {
-    //     logger.warn("Socket.IO соединение закрыто");
-    // });
 
     return socket;  // Чтобы можно было использовать снаружи
 }
