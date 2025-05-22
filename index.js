@@ -2,8 +2,7 @@ import signalR from "@microsoft/signalr";
 import dotenv from "dotenv";
 import mysql from "mysql2/promise";
 import logger from "./logger.js";
-import WebSocket from "ws";
-import { io } from "socket.io-client";  // Установите пакет: npm install socket.io-client
+import { io } from "socket.io-client";
 
 dotenv.config();
 
@@ -53,14 +52,14 @@ async function getAllEvents() {
 
 async function subscribeListMatches() {
     if (!connection) throw new Error("Сначала подключите клиента");
-    return await connection.invoke("SubscribeListMatches");
+    return await connection.invoke("SubscribeListMatches" );
 }
 
 async function subscribeMatch(gameId) {
     if (!connection) throw new Error("Сначала подключите клиента");
+
     try {
-        const res = await connection.invoke("SubscribeMatch", gameId);
-        return res;
+        return await connection.invoke("SubscribeMatch", gameId);
     } catch (err) {
         logger.error(`Ошибка подписки: ${err.message}`);
         return { success: false, error: err };
@@ -87,7 +86,6 @@ function formatDateForMySQL(dateString) {
 }
 
 async function subscribeToLiveMatches(matches) {
-    console.log(matches)
     for (const matchId of matches) {
         if (!subscribedMatches.has(matchId)) {
             await subscribeMatch(matchId);
@@ -117,20 +115,43 @@ async function reSubscribeToMatches() {
 }
 
 async function run() {
-    let socket = connectWebSocket();
-
     await initDb();
 
-    const authData = { token: "123" };
+    const authData = { token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1lIjoicGFydG1heHNwb3J0IiwiaHR0cDovL3NjaGVtYXMubWljcm9zb2Z0LmNvbS93cy8yMDA4LzA2L2lkZW50aXR5L2NsYWltcy9yb2xlIjoiNyIsImh0dHA6Ly9zY2hlbWFzLnhtbHNvYXAub3JnL3dzLzIwMDUvMDUvaWRlbnRpdHkvY2xhaW1zL25hbWVpZGVudGlmaWVyIjoiMTU4OCIsIm5iZiI6MTc0NzMwMDQxNywiZXhwIjoxNzQ3OTA1MjE3LCJpc3MiOiJTcG9ydFdvcmtCZW5jaCIsImF1ZCI6IkNsaWVudCJ9.S74aIeAG3pdnxkpSAB_kpCG52-URhVx4beLVEy_9Cpk" };
     const connectResult = await connectClient(authData);
     if (!connectResult.success) return;
 
     let listMatches = await subscribeListMatches();
-    console.log(listMatches)
     let filteredMatches = listMatches.Data.filter(match =>
         match?.Title?.includes("ACL") || match?.Title?.includes("USSR")
     );
     const filteredIds = filteredMatches.map(m => m.Id);
+
+    const sockets = [];
+    const socketMap = {};
+    for (const integrationMatchID of filteredIds) {
+        const [[game]] = await db.execute(
+            "SELECT * FROM wp_joomsport_matches WHERE integration_game_id = ? LIMIT 1",
+            [integrationMatchID]
+        );
+        let postID = null;
+        if (!game) {
+            postID = await createMatch(integrationMatchID)
+        } else {
+            postID = game.postID;
+        }
+
+        const socket = connectWebSocket(integrationMatchID, postID);
+
+        sockets[postID] = socket;
+        socketMap[postID] = {socket, socket_id: null, integrationMatchID};
+
+        socket.on('scout_authentication', (data) => {
+            socketMap[postID].socket_id = data.socket_id;
+            console.log(`Socket authenticated for match ${integrationMatchID} (postID: ${postID}): ${data.socket_id}`);
+        });
+    }
+
     const liveMatches = [];
     await subscribeToLiveMatches([...liveMatches, ...filteredIds]);
 
@@ -140,35 +161,53 @@ async function run() {
             const dateTimeEvent = formatDateForMySQL(matchData.Data.Date);
             const matchDataJson = JSON.stringify(matchData);
 
-            await db.execute(
-                "INSERT INTO events (match_id, event_id, json, date_time) VALUES (?, ?, ?, ?)",
-                [gameId, eventId, matchDataJson, dateTimeEvent]
+            // await db.execute(
+            //     "INSERT INTO events (match_id, event_id, json, date_time) VALUES (?, ?, ?, ?)",
+            //     [gameId, eventId, matchDataJson, dateTimeEvent]
+            // );
+
+
+
+
+            // отправить запрос на index-dev2 чтобы кэши создались, обновились и тд и в базу добавилось
+            // Сформировать нужную структуру объекта для отправки в сокет
+
+            const [[game]] = await db.execute(
+                "SELECT * FROM wp_joomsport_matches WHERE integration_game_id = ? LIMIT 1",
+                [gameId]
             );
 
-            if (socket) {
+            if (sockets[game.postID]) {
                 const payload =
                     {
                         command: "add_event",
                         data: matchData.Data,
-                        room: 899761,
-                        socket_id: socketId, // можно сгенерировать случайный
+                        room: game.postID,
+                        socket_id: socketMap[game.postID].socket_id, // можно сгенерировать случайный
                         is_scout: true
                     }
-                socket.emit("add_event", payload);
+                sockets[game.postID].emit("add_event", payload);
+
+                console.log("EVENT ADD " + game.postID)
+            } else {
+                console.log("EVENT NOT ADD " + game.postID)
             }
-            console.log("EVENT ADD")
+
         } catch (err) {
             logger.error(`Ошибка сохранения события в MySQL: ${err.message}`);
         }
     });
 
     connection.on("updateMatch", async (gameId, matchData) => {
+        console.log(matchData)
         if (!subscribedMatches.has(gameId)) return;
         console.log(matchData)
     });
 
     connection.on("addMatch", async (gameId) => {
+        // Создать матч в таблице
         logger.info(`Новый матч добавлен: ${gameId}`);
+
 
         try {
             // Обновляем список матчей
@@ -187,6 +226,18 @@ async function run() {
                     subscribedMatches.add(matchId);
                     logger.info(`Автоподписка на матч ${matchId} после addMatch`);
                     console.log(subscribedMatches)
+
+
+                    let [existing] = await db.execute(
+                        "SELECT 1 FROM wp_joomsport_matches WHERE integration_game_id = ? LIMIT 1",
+                        [gameId]
+                    );
+
+                    // Добавить привязку к нужным дивизионам
+
+                    if (existing.length === 0) {
+                        await createMatch(gameId);
+                    }
                 }
             }
         } catch (err) {
@@ -196,7 +247,15 @@ async function run() {
 
     connection.on("removeMatch", async (gameId, matchData) => {
         if (!subscribedMatches.has(gameId)) return;
+
+        let scoutMatchID = getScoutMatch(gameId)
+        console.log('ОТПИСКА', scoutMatchID)
+        sockets[scoutMatchID].disconnect();
+        delete sockets[scoutMatchID];
+        delete socketMap[scoutMatchID];
         console.log('ОТПИСКА')
+
+        // Здесь отключаемся от сокета
         logger.info(`Матч ${gameId} завершён, отписываемся...`);
         await unsubscribeMatch(gameId);
         subscribedMatches.delete(gameId);
@@ -236,24 +295,87 @@ async function run() {
     });
 }
 
-// SCOUT соет
+async function createMatch(gameId) {
+    const acl_ussr = 1022830; // 80676
+    const matchDay = 96184;
+    const dateMatch = "2025-05-19";
+    const timeMatch = "12:56:00";
+    const timeSocrMatch = "12:56";
+    const timeGmtMatch = "15:56:00";
 
-let wsClient;
+    await db.beginTransaction();
 
-function connectWebSocket() {
-    const socket = io("ws://localhost:5555", {  // Замените на ваш URL
+    try {
+        let postResult = await db.execute(
+            "INSERT INTO wp_posts (post_author, post_date, post_date_gmt, post_content, post_title, post_excerpt, post_status, comment_status, ping_status, post_password, post_name, to_ping, pinged, post_modified, post_modified_gmt, post_content_filtered, post_parent, guid, menu_order, post_type, post_mime_type, comment_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [2, dateMatch + " " + timeMatch, dateMatch + " " + timeGmtMatch, "", "1x integration match: " + gameId, "", "publish", "closed", "closed", "", gameId + "_1x_integration", "", "", dateMatch + " " + timeMatch, dateMatch + " " + timeGmtMatch, "", 0, "http://scout.local/match/" + gameId + "_1x_integration", 0, "joomsport_match", "", 0]
+        );
+        let postID = postResult[0].insertId;
+        await db.execute(
+            "INSERT INTO wp_joomsport_matches (postID, mdID, seasonID, teamHomeID, teamAwayID, groupID, status, date, time, scoreHome, scoreAway, post_status, duration, created_at, integration, integration_game_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [postID, matchDay, acl_ussr, 373475, 373474, 0, 0, dateMatch, timeSocrMatch, "0.00", "0.00", "publish", 0, dateMatch + " " + timeMatch, true, gameId]
+        );
+
+        const metaValues = [
+            [postID, '_joomsport_home_team', 373475],
+            [postID, '_joomsport_away_team', 373474],
+            [postID, '_joomsport_home_score', '0'],
+            [postID, '_joomsport_away_score', '0'],
+            [postID, '_joomsport_groupID', '0'],
+            [postID, '_joomsport_seasonid', acl_ussr],
+            [postID, '_joomsport_match_played', '0'],
+            [postID, '_joomsport_match_date', dateMatch],
+            [postID, '_joomsport_match_time', timeSocrMatch],
+            [postID, '_joomsport_match_ef', 'a:3:{i:16;s:0:"";i:19;s:0:"";i:22;s:0:"";}'],
+            [postID, '_edit_lock', '1747317607:2'],
+        ];
+
+        const query = `
+            INSERT INTO wp_postmeta (post_id, meta_key, meta_value)
+            VALUES (?, ?, ?)
+        `;
+
+        for (const row of metaValues) {
+            await db.execute(query, row);
+        }
+
+        await db.execute(
+            "INSERT INTO wp_term_relationships (object_id, term_taxonomy_id, term_order) VALUES (?, ?, ?)",
+            [postID,matchDay,0]
+        );
+
+        await db.commit();
+        console.log('Матч успешно добавлен в базу');
+        return postID
+    } catch (err) {
+        await db.rollback();
+        console.error('Ошибка при добавлении мета-данных:', err);
+    }
+    return false;
+}
+
+// SCOUT сокет
+function connectWebSocket(integrationMatchID, postID) {
+    const socket = io(process.env.SCOUT_SOCKET, {
         transports: ['websocket', 'polling'],
         closeOnBeforeunload: false,
     });
 
-    socket.emit('connecting_to_match', { match_id: 899761, api_key: "089ca38fa9b741db9ea4a66f3e71ed64", isScout: true}, () => {})
+    socket.emit('connecting_to_match', {
+        match_id: postID,
+        api_key: "089ca38fa9b741db9ea4a66f3e71ed64",
+        isScout: true
+    });
 
-    socket.on('scout_authentication', (data) => {
-        socketId = data.socket_id;
-        console.log('scout_authentication') // При подключении сюда прилетает Socket ID
-    })
+    return socket;
+}
 
-    return socket;  // Чтобы можно было использовать снаружи
+async function getScoutMatch(integrationMatchID) {
+    const [[game]] = await db.execute(
+        "SELECT * FROM wp_joomsport_matches WHERE integration_game_id = ? LIMIT 1",
+        [integrationMatchID]
+    );
+    return game.postID;
 }
 
 run().catch((err) => logger.error(`Фатальная ошибка: ${err.message}`));
