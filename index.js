@@ -208,7 +208,6 @@ async function run() {
         // Создать матч в таблице
         logger.info(`Новый матч добавлен: ${gameId}`);
 
-
         try {
             // Обновляем список матчей
             const updatedList = await subscribeListMatches();
@@ -236,7 +235,19 @@ async function run() {
                     // Добавить привязку к нужным дивизионам
 
                     if (existing.length === 0) {
-                        await createMatch(gameId);
+                        let postID = await createMatch(gameId);
+
+                        let socket = connectWebSocket(gameId, postID);
+
+                        sockets[postID] = socket;
+                        socketMap[postID] = {socket, socket_id: null, gameId};
+
+                        socket.on('scout_authentication', (data) => {
+                            socketMap[postID].socket_id = data.socket_id;
+                            console.log(`Socket authenticated for match ${gameId} (postID: ${postID}): ${data.socket_id}`);
+                        });
+                        console.log("Условие отработало")
+                        console.log(sockets[postID])
                     }
                 }
             }
@@ -248,12 +259,12 @@ async function run() {
     connection.on("removeMatch", async (gameId, matchData) => {
         if (!subscribedMatches.has(gameId)) return;
 
-        let scoutMatchID = getScoutMatch(gameId)
-        console.log('ОТПИСКА', scoutMatchID)
+        let scoutMatchID = await getScoutMatch(gameId)
+        console.log('ОТПИСКА')
+        console.log(scoutMatchID)
         sockets[scoutMatchID].disconnect();
         delete sockets[scoutMatchID];
         delete socketMap[scoutMatchID];
-        console.log('ОТПИСКА')
 
         // Здесь отключаемся от сокета
         logger.info(`Матч ${gameId} завершён, отписываемся...`);
