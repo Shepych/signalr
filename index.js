@@ -309,7 +309,7 @@ async function run() {
 async function createMatch(gameId) {
     const acl_ussr = 1022830; // 80676
     const matchDay = 96184;
-    const dateMatch = "2025-05-19";
+    const dateMatch = new Date().toISOString().split('T')[0];
     const timeMatch = "12:56:00";
     const timeSocrMatch = "12:56";
     const timeGmtMatch = "15:56:00";
