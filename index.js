@@ -14,12 +14,24 @@ const acl_ussr = 1022830; // 80676
 const matchDay = 96184;
 let scoutEvents = []
 
+const tournaments = {
+    'ACL': {
+        operatorId: 2,
+    },
+    'USSR': {
+        operatorId: 3,
+    },
+}
+
 async function run() {
     await initDb();
 
     let accessToken = await integrationAuth();
+
+    // let integrationMatchesFromAPI = await getIntegrationMatches(accessToken)
     let events1X = await integrationEvents(accessToken);
-    console.log(events1X)
+    // console.log(integrationMatchesFromAPI)
+    // return;
 
     const authData = { token: accessToken };
     const connectResult = await connectClient(authData);
@@ -146,6 +158,9 @@ async function run() {
             const filteredMatches = updatedList.Data.filter(match =>
                 match?.Title?.includes("ACL") || match?.Title?.includes("USSR")
             );
+
+            console.log('filtred: ')
+            console.log(filteredMatches)
 
             const filteredIds = filteredMatches.map(m => m.Id);
 
@@ -347,15 +362,14 @@ function generateRandomString(length) {
     }
     return result;
 }
-async function createMatch(gameId) {
-
+async function createMatch(gameId, xTeamHomeID = 373475, xTeamAwayID = 373474) {
     const dateMatch = new Date().toISOString().split('T')[0];
     const timeMatch = "12:56:00";
     const timeSocrMatch = "12:56";
     const timeGmtMatch = "15:56:00";
-    let teamHomeID = 123; // Передать сюда ID 1x матча
-    let teamAwayID = 123;
-
+    let teamHomeID = xTeamHomeID; // Передать сюда ID 1x матча
+    let teamAwayID = xTeamAwayID;
+    // await createTeam();
     // Найти по метаполю в бд этот интеграционный ID если нету - создать
 
     await db.beginTransaction();
@@ -368,12 +382,12 @@ async function createMatch(gameId) {
         let postID = postResult[0].insertId;
         await db.execute(
             "INSERT INTO wp_joomsport_matches (postID, mdID, seasonID, teamHomeID, teamAwayID, groupID, status, date, time, scoreHome, scoreAway, post_status, duration, created_at, integration, integration_game_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [postID, matchDay, acl_ussr, 373475, 373474, 0, 0, dateMatch, timeSocrMatch, "0.00", "0.00", "publish", 0, dateMatch + " " + timeMatch, true, gameId]
+            [postID, matchDay, acl_ussr, teamHomeID, teamAwayID, 0, 0, dateMatch, timeSocrMatch, "0.00", "0.00", "publish", 0, dateMatch + " " + timeMatch, true, gameId]
         );
 
         const metaValues = [
-            [postID, '_joomsport_home_team', 373475],
-            [postID, '_joomsport_away_team', 373474],
+            [postID, '_joomsport_home_team', teamHomeID],
+            [postID, '_joomsport_away_team', teamAwayID],
             [postID, '_joomsport_home_score', '0'],
             [postID, '_joomsport_away_score', '0'],
             [postID, '_joomsport_groupID', '0'],
@@ -504,6 +518,11 @@ async function addEvent(matchId, eventId) {
     }
 }
 
+function protocolLogic() {
+    // Нужно учитывать ещё событие которое отменяет последнее событие
+    console.log('Здесь перебираем массив с событиями')
+    // Обрабатываем массив с событиями, и отправляем необходимые данные по сокету и в API
+}
 run().catch((err) => logger.error(`Фатальная ошибка: ${err.message}`));
 
 async function integrationAuth() {
@@ -547,6 +566,19 @@ async function integrationEvents(accessToken) {
 
 }
 
+async function getIntegrationMatches(accessToken) {
+    return await axios.get('https://partners.xsportzone.com/api/v1/games', {
+        headers: {
+            'Authorization': `Bearer ${accessToken}`
+        }
+    }).then(response => {
+        if (response.data.CodeError === 0) {
+            console.log(response.data.Data)
+            return response.data.Data;
+        }
+    })
+}
+
 function eventConverter(eventId) {
     if (!scoutEvents) {
         throw new Error("События ещё не загружены. Сначала вызовите integrationEvents.");
@@ -558,7 +590,15 @@ function eventConverter(eventId) {
     console.log('fe_id: ' + found.id)
     return found ? found.id : null;
 }
-// Функционал получения игроков по ID из интеграции, если таких нет - создаём и привязываем к турниру
-// Функция конвертации всех событий 1x в наши события
-// Фукнционал создания игровых дней привязанных к нужным сезонам
+
+
+// Фукнционал создания игровых дней привязанных к нужным сезонам   (в среду делаем)
+
+
+
+
+
+// Функционал получения игроков по ID из интеграции, если таких нет - создаём и привязываем к турниру !!!!!!!!!!!!!!!!
+// Функция конвертации всех событий 1x в наши события +++++++++++++
 // Отправка событий по сокету в нужном нам формате
+// Логика расчёта и отправки данных для каждого протокола
