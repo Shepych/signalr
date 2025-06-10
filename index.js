@@ -13,6 +13,7 @@ let subscribedMatches = new Set()
 const acl_ussr = 1022830; // 80676
 const matchDay = 96184;
 let scoutEvents = []
+let accessToken = null;
 
 const tournaments = {
     'ACL': {
@@ -26,7 +27,7 @@ const tournaments = {
 async function run() {
     await initDb();
 
-    let accessToken = await integrationAuth();
+    accessToken = await integrationAuth();
 
     // let integrationMatchesFromAPI = await getIntegrationMatches(accessToken)
     let events1X = await integrationEvents(accessToken);
@@ -39,7 +40,7 @@ async function run() {
 
     let listMatches = await subscribeListMatches();
     let filteredMatches = listMatches.Data.filter(match =>
-        match?.Title?.includes("ACL") || match?.Title?.includes("USSR")
+        match?.Title?.includes("IPBL") // Написать функцию для распределения нужных туриков
     );
     const filteredIds = filteredMatches.map(m => m.Id);
 
@@ -52,7 +53,7 @@ async function run() {
         );
         let postID = null;
         if (!game) {
-            postID = await createMatch(integrationMatchID)
+            postID = await createMatch(integrationMatchID, filteredMatches)
         } else {
             postID = game.postID;
         }
@@ -75,14 +76,16 @@ async function run() {
         try {
             const eventId = matchData.Data.Type;
             const dateTimeEvent = formatDateForMySQL(matchData.Data.Date);
-            const matchDataJson = JSON.stringify(matchData);
+            // const matchDataJson = JSON.stringify(matchData);
 
             // await db.execute(
             //     "INSERT INTO events (match_id, event_id, json, date_time) VALUES (?, ?, ?, ?)",
             //     [gameId, eventId, matchDataJson, dateTimeEvent]
             // );
 
-
+            console.log('1x event json:')
+            console.log(matchData.Data)
+            // Достать отсюда Time и Team
 
 
             // отправить запрос на index-dev2 чтобы кэши создались, обновились и тд и в базу добавилось
@@ -100,20 +103,22 @@ async function run() {
                     additionalTo: null,
                     assists: [],
                     e_id: eventConverter(eventId),
-                    e_name: "TEST",
-                    id: 38905880,
+                    e_name: "TEST", // Вытащить название события
+                    id: 38905880, // Сюда передать ID добавленного события
                     is_deleted: false,
-                    minutes: "00:00",
+                    minutes: formatTime(matchData.Data.Time),
                     player: "",
                     post_title: "TEST",
-                    score: "1 - 1",
+                    score: matchData.Data.ScoreInfo.ScoreFull.Score1 + " - " + matchData.Data.ScoreInfo.ScoreFull.Score2,
                     t_id: 373474,
-                    timeevent: "13:53:11"
+                    timeevent: getCurrentTime()
                 }]
+
                 const payload =
                     {
                         command: "add_event",
-                        data: matchData.Data, // Сюда отправить форматированную дату
+                        // data: matchData.Data, // Сюда отправить форматированную дату
+                        data: test, // Сюда отправить форматированную дату
                         room: game.postID,
                         socket_id: socketMap[game.postID].socket_id, // можно сгенерировать случайный
                         is_scout: true
@@ -130,8 +135,8 @@ async function run() {
                 sockets[game.postID].emit("add_event", payload);
                 sockets[game.postID].emit("insertRecord", payloadTwo);
 
-                await addEvent(game.postID, eventId)
-                console.log("EVENT ADD " + game.postID)
+                await addEvent(game.postID, eventId, matchData.Data)
+                console.log("EVENT ADD FOR SCOUT GAME: " + game.postID)
             } else {
                 console.log("EVENT NOT ADD " + game.postID)
             }
@@ -156,11 +161,8 @@ async function run() {
             const updatedList = await subscribeListMatches();
 
             const filteredMatches = updatedList.Data.filter(match =>
-                match?.Title?.includes("ACL") || match?.Title?.includes("USSR")
+                match?.Title?.includes("IPBL")
             );
-
-            console.log('filtred: ')
-            console.log(filteredMatches)
 
             const filteredIds = filteredMatches.map(m => m.Id);
 
@@ -170,8 +172,7 @@ async function run() {
                     await subscribeMatch(matchId);
                     subscribedMatches.add(matchId);
                     logger.info(`Автоподписка на матч ${matchId} после addMatch`);
-                    console.log(subscribedMatches)
-
+                    // console.log(subscribedMatches)
 
                     let [existing] = await db.execute(
                         "SELECT 1 FROM wp_joomsport_matches WHERE integration_game_id = ? LIMIT 1",
@@ -181,7 +182,7 @@ async function run() {
                     // Добавить привязку к нужным дивизионам
 
                     if (existing.length === 0) {
-                        let postID = await createMatch(gameId);
+                        let postID = await createMatch(gameId, filteredMatches);
 
                         let socket = connectWebSocket(gameId, postID);
 
@@ -192,7 +193,6 @@ async function run() {
                             socketMap[postID].socket_id = data.socket_id;
                             console.log(`Socket authenticated for match ${gameId} (postID: ${postID}): ${data.socket_id}`);
                         });
-                        console.log("Условие отработало")
                         console.log(sockets[postID])
                     }
                 }
@@ -340,7 +340,7 @@ async function refreshAndSubscribeFilteredMatches() {
         const updatedList = await subscribeListMatches();
 
         const filteredMatches = updatedList.Data.filter(match =>
-            match?.Title?.includes("ACL") || match?.Title?.includes("USSR")
+            match?.Title?.includes("IPBL")
         );
 
         const filteredIds = filteredMatches.map(m => m.Id);
@@ -362,15 +362,38 @@ function generateRandomString(length) {
     }
     return result;
 }
-async function createMatch(gameId, xTeamHomeID = 373475, xTeamAwayID = 373474) {
+async function createMatch(gameId, ourMatches, xTeamHomeID = 373475, xTeamAwayID = 373474) {
     const dateMatch = new Date().toISOString().split('T')[0];
-    const timeMatch = "12:56:00";
-    const timeSocrMatch = "12:56";
-    const timeGmtMatch = "15:56:00";
-    let teamHomeID = xTeamHomeID; // Передать сюда ID 1x матча
-    let teamAwayID = xTeamAwayID;
-    // await createTeam();
-    // Найти по метаполю в бд этот интеграционный ID если нету - создать
+    const timeMatch = getCurrentTime();
+    const timeSocrMatch = getCurrentTime('HH:mm');
+    const timeGmtMatch = getCurrentTime('HH:mm', 3);
+
+    console.log('filtredNew: ')
+    console.log(ourMatches)
+
+    let matchInfo // Здесь оператор ID лежит и ID команд
+    const integrationMatches = await getIntegrationMatches(accessToken)
+
+    for (const match of integrationMatches) {
+        if(match.Id === gameId) matchInfo = match
+    }
+
+    let teamHomeID = await createTeam(matchInfo.Team1); // Передать сюда ID 1x матча
+    let teamAwayID = await createTeam(matchInfo.Team2);
+
+    console.log('Team1:')
+    console.log(teamHomeID)
+
+    console.log('Team2:')
+    console.log(teamAwayID)
+
+    // Найти айдишник нашего матча в ourMatches
+    // Достать id оператора из списка
+    // Сделать запрос на получение оператора
+    // Получить ID команд и сделать запрос по этим интеграционным ID (integration_team_id) в нашей базе
+    // Если они не найдены - то создаём, НО там может быть 0, если 0 - тогда ищем по названию (integration_team_name)
+    // Нашли или создали - и достаём этот POST ID, Team1 подставляем в teamHome, Team2 подставляем в teamAway для матча
+
 
     await db.beginTransaction();
 
@@ -415,6 +438,44 @@ async function createMatch(gameId, xTeamHomeID = 373475, xTeamAwayID = 373474) {
 
         await db.commit();
         console.log('Матч успешно добавлен в базу');
+
+        // Отправить запрос на создание matchinfo (вначале создать апи)
+        // И там же создаём кэш матча
+
+        axios.get(process.env.SCOUT_URL + '/api/integration/make_cache_files.php?match_id=' + postID + '&key=' + process.env.USER_KEYS_ACCESS_TOKEN)
+            .then(response => {
+                console.log('Matchinfo создан:', response.data);
+            })
+            .catch(error => {
+                console.error('Ошибка создания Matchinfo:', error.message);
+            });
+
+        // Создание кэшей
+        const url = process.env.SCOUT_URL + '/api/protocol/v3.0/index.php';
+        const params = {
+            action: 'make_cache_match',
+            score_string: '0-0',
+            away_score: 0,
+            home_score: 0,
+            match_time_start: '14:00',
+            match_end: '15:00',
+            home_team_name: 'Team1',
+            away_team_name: 'Team2',
+            status: 0,
+            division_id: 80676,
+            match_id: postID,
+            stage: 1,
+            type_of_sport: 'bb'
+        };
+
+        axios.get(url, { params })
+            .then(response => {
+                console.log('Кэш создан:', response.data);
+            })
+            .catch(error => {
+                console.error('Ошибка создания кэша:', error.message);
+            });
+
         return postID
     } catch (err) {
         await db.rollback();
@@ -423,47 +484,99 @@ async function createMatch(gameId, xTeamHomeID = 373475, xTeamAwayID = 373474) {
     return false;
 }
 
-async function createTeam() {
-    // Указать все параметры для создания команды
-    let teamStringId = generateRandomString(10);
-    const dateTeam = new Date().toISOString().split('T')[0];
-    const timeTeam = "12:56:00";
-    const gmtTimeTeam = "15:56:00";
-    const integrationID = 1111;
-
-    let postTeam = await db.execute(
-        "INSERT INTO wp_posts (post_author, post_date, post_date_gmt, post_content, post_title, post_excerpt, post_status, comment_status, ping_status, post_password, post_name, to_ping, pinged, post_modified, post_modified_gmt, post_content_filtered, post_parent, guid, menu_order, post_type, post_mime_type, comment_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [2, dateTeam + " " + timeTeam, dateTeam + " " + gmtTimeTeam, "", "1x integration TEAM " + teamStringId, "", "publish", "closed", "closed", "", teamStringId + "_integration", "", "", dateTeam + " " + timeTeam, dateTeam + " " + gmtTimeTeam, "", 0, "http://scout.local/match/" + teamStringId + "_1x_integration", 0, "joomsport_team", "", 0]
+async function createTeam(teamInfo) {
+    const integrationID = teamInfo.Id;
+    const integrationTeamName = teamInfo.Name;
+    // Поиск по integration_team_id
+    const [findTeamInScout] = await db.execute(
+        "SELECT * FROM `wp_postmeta` WHERE `meta_key` = 'integration_team_id' AND `meta_value` = " + integrationID
     );
-    let postID = postTeam[0].insertId;
 
-    const metaValues = [
-        [postID, '_edit_lock', '1747317607:2'],
-        [postID, '_edit_last', 195],
-        [postID, '_thumbnail_id', 0],
-        [postID, '_wp_old_date', 0],
-        [postID, 'vdw_gallery_id', ''],
 
-        [postID, '_joomsport_team_personal', 'a:2:{s:10:"short_name";s:11:"Integration Team 1";s:11:"middle_name";s:11:"IntegrationTeam1";}'],
-        [postID, '_joomsport_team_about', ''],
-        [postID, '_joomsport_team_ef', 'a:5:{i:20;s:0:"";i:23;s:0:"";i:29;s:8:"IT1";i:32;s:11:"int_team_1";i:33;s:11:"IntegrationTeam1";}'],
-        [postID, '_joomsport_team_venue', '0'],
-
-        [postID, 'wpbf_options', 'a:1:{i:0;s:13:"layout-global";}'],
-        [postID, 'wpbf_sidebar_position', 'global'],
-
-        [postID, 'integration_team_id', integrationID],
-    ];
-
-    const query = `
-            INSERT INTO wp_postmeta (post_id, meta_key, meta_value)
-            VALUES (?, ?, ?)
-        `;
-
-    for (const row of metaValues) {
-        await db.execute(query, row);
+    let teamScout = findTeamInScout[0];
+    console.log(teamScout)
+    if (!teamScout) {
+        // Если ничего не найдено — ищем по integration_team_name
+        const [findByName] = await db.execute(
+            "SELECT * FROM `wp_postmeta` WHERE `meta_key` = 'integration_team_name' AND `meta_value` = '" + integrationTeamName + "'"
+        );
+        teamScout = findByName[0];
+        console.log(teamScout)
     }
-    console.log('Команда создана');
+
+    let postID = null;
+
+    if(teamScout) {
+        console.log('TUT2')
+        // Возвращаем существующую команду
+        return teamScout.post_id
+    } else {
+        console.log('TUT3')
+        // Создаём новую команду
+        let teamStringId = generateRandomString(10);
+        const dateTeam = new Date().toISOString().split('T')[0];
+        const timeTeam = "12:56:00";
+        const gmtTimeTeam = "15:56:00";
+
+        const MAX_ATTEMPTS = 3;
+        let attempt = 0;
+        let success = false;
+
+        while (attempt < MAX_ATTEMPTS && !success) {
+            attempt++;
+            try {
+                await db.beginTransaction();
+
+                // Вставка в wp_posts
+                let postTeam = await db.execute(
+                    "INSERT INTO wp_posts (post_author, post_date, post_date_gmt, post_content, post_title, post_excerpt, post_status, comment_status, ping_status, post_password, post_name, to_ping, pinged, post_modified, post_modified_gmt, post_content_filtered, post_parent, guid, menu_order, post_type, post_mime_type, comment_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [2, dateTeam + " " + timeTeam, dateTeam + " " + gmtTimeTeam, "", integrationTeamName, "", "publish", "closed", "closed", "", teamStringId + "_integration", "", "", dateTeam + " " + timeTeam, dateTeam + " " + gmtTimeTeam, "", 0, "http://scout.local/match/" + teamStringId + "_1x_integration", 0, "joomsport_team", "", 0]
+                );
+
+                postID = postTeam[0].insertId;
+                const lengthTeamName = new TextEncoder().encode(integrationTeamName).length; // Длинна строки для SERIALIZE php
+
+                // Формирование metaValues
+                const metaValues = [
+                    [postID, '_edit_lock', '1747317607:2'],
+                    [postID, '_edit_last', 195],
+                    [postID, '_thumbnail_id', 0],
+                    [postID, '_wp_old_date', 0],
+                    [postID, 'vdw_gallery_id', ''],
+
+                    [postID, '_joomsport_team_personal', 'a:2:{s:10:"short_name";s:11:"Integration Team 1";s:11:"middle_name";s:11:"IntegrationTeam1";}'],
+                    [postID, '_joomsport_team_about', ''],
+                    [postID, '_joomsport_team_ef', 'a:5:{i:20;s:0:"";i:23;s:0:"";i:29;s:0:"";i:32;s:' + lengthTeamName + ':"' + integrationTeamName + '";i:33;s:' + lengthTeamName + ':"' + integrationTeamName + '";}'],
+                    [postID, '_joomsport_team_venue', '0'],
+
+                    [postID, 'wpbf_options', 'a:1:{i:0;s:13:"layout-global";}'],
+                    [postID, 'wpbf_sidebar_position', 'global'],
+
+                    [postID, 'integration_team_id', integrationID],
+                    [postID, 'integration_team_name', integrationTeamName],
+                ];
+
+                const query = `
+                    INSERT INTO wp_postmeta (post_id, meta_key, meta_value)
+                    VALUES (?, ?, ?)
+                `;
+
+                for (const row of metaValues) {
+                    await db.execute(query, row);
+                }
+
+                await db.commit();
+                success = true;
+            } catch (err) {
+                await db.rollback();
+                if (attempt >= MAX_ATTEMPTS) {
+                    throw new Error("Не удалось выполнить транзакцию после нескольких попыток: " + err.message);
+                }
+            }
+        }
+
+        return postID;
+    }
 }
 
 // SCOUT сокет
@@ -490,23 +603,48 @@ async function getScoutMatch(integrationMatchID) {
     return game.postID;
 }
 
-async function addEvent(matchId, eventId) {
+function formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function getCurrentTime(format = 'HH:mm:ss', gmtOffset = 0) {
+    const now = new Date();
+
+    // Получаем время в миллисекундах и применяем смещение по GMT
+    const localTimestamp = now.getTime();
+    const localOffset = now.getTimezoneOffset() * 60000; // в мс
+    const targetTime = new Date(localTimestamp + localOffset + gmtOffset * 3600000);
+
+    const hours = String(targetTime.getHours()).padStart(2, '0');
+    const minutes = String(targetTime.getMinutes()).padStart(2, '0');
+    const seconds = String(targetTime.getSeconds()).padStart(2, '0');
+
+    return format
+        .replace('HH', hours)
+        .replace('mm', minutes)
+        .replace('ss', seconds);
+}
+
+async function addEvent(matchId, eventId, eventData) {
     const params = {
         action: 'add_event',
         match_id: matchId,
         post_title: 'Событие из SIGNAL_R',
         t_id: 0,
         e_name: 'Событие из SIGNAL_R',
-        minutes: '00:00',
+        minutes: formatTime(eventData.Time),
         stage: 0,
         e_id: eventConverter(eventId),
         player_number: null,
-        left_time: '00:00',
-        total_time: '00:00',
+        left_time: formatTime(eventData.Time),
+        total_time: formatTime(eventData.Time),
         season_id: acl_ussr,
         user_id: 2,
         frame: 0
     }
+
     console.log('matchID: ' + matchId)
     console.log('eventID: ' + eventId)
 
@@ -523,6 +661,7 @@ function protocolLogic() {
     console.log('Здесь перебираем массив с событиями')
     // Обрабатываем массив с событиями, и отправляем необходимые данные по сокету и в API
 }
+
 run().catch((err) => logger.error(`Фатальная ошибка: ${err.message}`));
 
 async function integrationAuth() {
@@ -584,7 +723,7 @@ function eventConverter(eventId) {
         throw new Error("События ещё не загружены. Сначала вызовите integrationEvents.");
     }
 
-    console.log(scoutEvents);
+    // console.log(scoutEvents);
     console.log('1xevent: ' + eventId);
     const found = scoutEvents.find(event => event.integration_id === eventId);
     console.log('fe_id: ' + found.id)
@@ -593,7 +732,6 @@ function eventConverter(eventId) {
 
 
 // Фукнционал создания игровых дней привязанных к нужным сезонам   (в среду делаем)
-
 
 
 
