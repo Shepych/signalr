@@ -4,25 +4,118 @@ import mysql from "mysql2/promise";
 import logger from "./logger.js";
 import { io } from "socket.io-client";
 import axios from 'axios';
+import net from 'net';
+
+// Отправка в расписание (на паузе)
+const client = net.createConnection({ port: 1234, host: '127.0.0.1' }, () => {
+    console.log('Connected to PHP socket');
+    const message = {
+        divisionID: 80676,
+        match_date: "2025-06-16",
+        message: {
+            type: "ADD_MATCH",
+            data: {
+                division: { id: 80676 },
+                season: { id: 1022830 },
+                match: {
+                    id: 456,
+                    datetime: "2025-06-16 15:30",
+                    link: "https://example.com",
+                    mdName: "Матч дня"
+                },
+                home: {
+                    name: {
+                        ru: 'RU AWAY',
+                        en: 'EN AWAY',
+                    },
+                    score: 0,
+                    id: 373474
+                },
+                away: {
+                    name: {
+                        ru: 'RU AWAY',
+                        en: 'EN AWAY',
+                    },
+                    score: 0,
+                    id: 373475
+                }
+            }
+        }
+    };
+
+    client.write(JSON.stringify(message) + '\n');
+    client.end();
+});
+
+client.on('error', (err) => {
+    console.error('Ошибка:', err.message);
+});
+
+// КОНЕЦ ОТПРАВКИ НА РАСПИСАНИЕ
 
 dotenv.config();
 
 let db;
 let connection;
 let subscribedMatches = new Set()
-const acl_ussr = 1022830; // 80676
+const acl_ussr = 1022830; // это season_id, а его division_id - 80676
 const matchDay = 96184;
 let scoutEvents = []
 let accessToken = null;
 
-const tournaments = {
-    'ACL': {
-        operatorId: 2,
-    },
-    'USSR': {
-        operatorId: 3,
-    },
+const operatorTours = {
+    1141: [
+        'Space division M1',
+        'Space division M2',
+        'Space division M3',
+        'Space division M4',
+        'Space division M5',
+
+        'Space Division GRL',
+        'Space Division GRL 2',
+        'Space Division GRL 3',
+    ],
+    1340: [
+        'Space division M1',
+        'Space division M2',
+        'Space division M3',
+        'Space division M4',
+        'Space division M5',
+
+        'Space Division GRL',
+        'Space Division GRL 2',
+        'Space Division GRL 3',
+    ],
+    1432: [
+        'Pro Division A',
+        'Pro Division B',
+        'Pro Division C',
+        'Pro Division G',
+        'Pro Division В', // ?
+    ],
+    1548: [
+        'Pro Division H',
+        'Pro Division F',
+        'Pro Division J',
+        'Pro Division K',
+    ],
+    1433: [
+        'Pro Division Woman'
+    ],
+    1442: [
+        'Prime Division A',
+        'Prime Division B',
+        'Prime Division C',
+    ],
+    1527: [
+        'Prime Division Woman A',
+        'Prime Division Woman B',
+        'Prime Division Woman C',
+    ]
 }
+
+const sockets = [];
+const socketMap = {};
 
 async function run() {
     await initDb();
@@ -40,12 +133,11 @@ async function run() {
 
     let listMatches = await subscribeListMatches();
     let filteredMatches = listMatches.Data.filter(match =>
-        match?.Title?.includes("IPBL") // Написать функцию для распределения нужных туриков
+        match?.Title?.includes("PRO") // Написать функцию для распределения нужных туриков
     );
     const filteredIds = filteredMatches.map(m => m.Id);
 
-    const sockets = [];
-    const socketMap = {};
+
     for (const integrationMatchID of filteredIds) {
         const [[game]] = await db.execute(
             "SELECT * FROM wp_joomsport_matches WHERE integration_game_id = ? LIMIT 1",
@@ -99,41 +191,41 @@ async function run() {
 
 
             if (sockets[game.postID]) {
-                const test = [{
-                    additionalTo: null,
-                    assists: [],
-                    e_id: eventConverter(eventId),
-                    e_name: "TEST", // Вытащить название события
-                    id: 38905880, // Сюда передать ID добавленного события
-                    is_deleted: false,
-                    minutes: formatTime(matchData.Data.Time),
-                    player: "",
-                    post_title: "TEST",
-                    score: matchData.Data.ScoreInfo.ScoreFull.Score1 + " - " + matchData.Data.ScoreInfo.ScoreFull.Score2,
-                    t_id: 373474,
-                    timeevent: getCurrentTime()
-                }]
-
-                const payload =
-                    {
-                        command: "add_event",
-                        // data: matchData.Data, // Сюда отправить форматированную дату
-                        data: test, // Сюда отправить форматированную дату
-                        room: game.postID,
-                        socket_id: socketMap[game.postID].socket_id, // можно сгенерировать случайный
-                        is_scout: true
-                    }
-                const payloadTwo =
-                    {
-                        command: "insertRecord",
-                        data: test, // Сюда отправить форматированную дату
-                        room: game.postID,
-                        socket_id: socketMap[game.postID].socket_id, // можно сгенерировать случайный
-                        is_scout: true
-                    }
-
-                sockets[game.postID].emit("add_event", payload);
-                sockets[game.postID].emit("insertRecord", payloadTwo);
+                // const test = [{
+                //     additionalTo: null,
+                //     assists: [],
+                //     e_id: eventConverter(eventId),
+                //     e_name: "TEST", // Вытащить название события
+                //     id: 38905880, // Сюда передать ID добавленного события
+                //     is_deleted: false,
+                //     minutes: formatTime(matchData.Data.Time),
+                //     player: "",
+                //     post_title: "TEST",
+                //     score: matchData.Data.ScoreInfo.ScoreFull.Score1 + " - " + matchData.Data.ScoreInfo.ScoreFull.Score2,
+                //     t_id: 373474, // Привязать ID команды из скаута
+                //     timeevent: getCurrentTime()
+                // }]
+                //
+                // const payload =
+                //     {
+                //         command: "add_event",
+                //         // data: matchData.Data, // Сюда отправить форматированную дату
+                //         data: test, // Сюда отправить форматированную дату
+                //         room: game.postID,
+                //         socket_id: socketMap[game.postID].socket_id, // можно сгенерировать случайный
+                //         is_scout: true
+                //     }
+                // const payloadTwo =
+                //     {
+                //         command: "insertRecord",
+                //         data: test, // Сюда отправить форматированную дату
+                //         room: game.postID,
+                //         socket_id: socketMap[game.postID].socket_id, // можно сгенерировать случайный
+                //         is_scout: true
+                //     }
+                //
+                // sockets[game.postID].emit("add_event", payload);
+                // sockets[game.postID].emit("insertRecord", payloadTwo);
 
                 await addEvent(game.postID, eventId, matchData.Data)
                 console.log("EVENT ADD FOR SCOUT GAME: " + game.postID)
@@ -161,7 +253,7 @@ async function run() {
             const updatedList = await subscribeListMatches();
 
             const filteredMatches = updatedList.Data.filter(match =>
-                match?.Title?.includes("IPBL")
+                match?.Title?.includes("PRO")
             );
 
             const filteredIds = filteredMatches.map(m => m.Id);
@@ -207,7 +299,8 @@ async function run() {
 
         let scoutMatchID = await getScoutMatch(gameId)
         console.log('ОТПИСКА')
-        console.log(scoutMatchID)
+        // Отправляем запрос на API чтоб статус 1 в wp_postmeta поставить и wp_joomsport_matches
+        // console.log(scoutMatchID)
         sockets[scoutMatchID].disconnect();
         delete sockets[scoutMatchID];
         delete socketMap[scoutMatchID];
@@ -340,7 +433,7 @@ async function refreshAndSubscribeFilteredMatches() {
         const updatedList = await subscribeListMatches();
 
         const filteredMatches = updatedList.Data.filter(match =>
-            match?.Title?.includes("IPBL")
+            match?.Title?.includes("PRO")
         );
 
         const filteredIds = filteredMatches.map(m => m.Id);
@@ -365,8 +458,8 @@ function generateRandomString(length) {
 async function createMatch(gameId, ourMatches, xTeamHomeID = 373475, xTeamAwayID = 373474) {
     const dateMatch = new Date().toISOString().split('T')[0];
     const timeMatch = getCurrentTime();
-    const timeSocrMatch = getCurrentTime('HH:mm');
-    const timeGmtMatch = getCurrentTime('HH:mm', 3);
+    const timeSocrMatch = getCurrentTime('HH:mm', 3);
+    const timeGmtMatch = getCurrentTime('HH:mm', 6);
 
     console.log('filtredNew: ')
     console.log(ourMatches)
@@ -378,8 +471,8 @@ async function createMatch(gameId, ourMatches, xTeamHomeID = 373475, xTeamAwayID
         if(match.Id === gameId) matchInfo = match
     }
 
-    let teamHomeID = await createTeam(matchInfo.Team1); // Передать сюда ID 1x матча
-    let teamAwayID = await createTeam(matchInfo.Team2);
+    let teamHomeID = await createTeam(matchInfo.Team1, matchInfo.Config.ColorTeam1);
+    let teamAwayID = await createTeam(matchInfo.Team2, matchInfo.Config.ColorTeam2);
 
     console.log('Team1:')
     console.log(teamHomeID)
@@ -415,7 +508,7 @@ async function createMatch(gameId, ourMatches, xTeamHomeID = 373475, xTeamAwayID
             [postID, '_joomsport_away_score', '0'],
             [postID, '_joomsport_groupID', '0'],
             [postID, '_joomsport_seasonid', acl_ussr],
-            [postID, '_joomsport_match_played', '0'],
+            [postID, '_joomsport_match_played', '-1'],
             [postID, '_joomsport_match_date', dateMatch],
             [postID, '_joomsport_match_time', timeSocrMatch],
             [postID, '_joomsport_match_ef', 'a:3:{i:16;s:0:"";i:19;s:0:"";i:22;s:0:"";}'],
@@ -484,17 +577,80 @@ async function createMatch(gameId, ourMatches, xTeamHomeID = 373475, xTeamAwayID
     return false;
 }
 
-async function createTeam(teamInfo) {
+async function updateCache(matchId, eventData) {
+    // Делаем запрос на matchinfo кэш, парсим и подставляем в update_cache
+
+    const cacheUrl = process.env.SCOUT_URL + '/matchinfo/' + matchId + '.json'; // укажи свой URL
+
+    axios.get(cacheUrl)
+        .then(response => {
+            const data = response.data;
+
+            const dateTimeStr = data.datatime; // "13.06.2025 13:54"
+
+            const [datePart, timePart] = dateTimeStr.split(' '); // ["13.06.2025", "13:54"]
+            const [day, month, year] = datePart.split('.'); // ["13", "06", "2025"]
+
+            const formattedDate = `${year}-${month}-${day}`; // "2025-06-13"
+            const formattedTime = timePart; // "13:54"
+
+            // Создание кэшей
+            const url = process.env.SCOUT_URL + '/api/protocol/v3.0/index.php';
+            const params = {
+                action: 'update_cache',
+                data: {
+                    score_string: eventData.ScoreInfo.ScoreFull.Score1 + '-' + eventData.ScoreInfo.ScoreFull.Score1,
+                    away_score: eventData.ScoreInfo.ScoreFull.Score2,
+                    home_score: eventData.ScoreInfo.ScoreFull.Score1,
+                    match_time_start: formattedTime,
+                    match_end: '15:00',
+                    home_team_name: data.home, // либо убрать полностью, либо вытягивать из matchinfo
+                    away_team_name: data.away,
+                    matchDate: data.datatime, // Прокинуть дату текущего матча
+                    status: eventConverter(eventData.Type) !== 193 ? -1 : 1,
+                    division_id: 80676,
+                    date: formattedDate, // Прокинуть дату текущего матча
+                    match_id: matchId,
+                    stage: 1,
+                    type_of_sport: 'bb'
+                }
+            };
+
+            axios.post(url, params)
+                .then(response => {
+                    console.log('updateCache:');
+                    console.log(response.data);
+                })
+                .catch(error => {
+                    console.error('updateCache error:', error.message);
+                });
+
+        })
+        .catch(error => {
+            console.error('Ошибка при получении JSON:', error.message);
+    });
+
+
+
+
+
+
+}
+async function createTeam(teamInfo, colorHex) {
     const integrationID = teamInfo.Id;
     const integrationTeamName = teamInfo.Name;
     // Поиск по integration_team_id
+
     const [findTeamInScout] = await db.execute(
         "SELECT * FROM `wp_postmeta` WHERE `meta_key` = 'integration_team_id' AND `meta_value` = " + integrationID
     );
 
-
     let teamScout = findTeamInScout[0];
-    console.log(teamScout)
+
+    if(integrationID === 0) { // Если у иксов не проставел ID команды
+        teamScout = false;
+    }
+
     if (!teamScout) {
         // Если ничего не найдено — ищем по integration_team_name
         const [findByName] = await db.execute(
@@ -535,6 +691,7 @@ async function createTeam(teamInfo) {
 
                 postID = postTeam[0].insertId;
                 const lengthTeamName = new TextEncoder().encode(integrationTeamName).length; // Длинна строки для SERIALIZE php
+                const lengthColorHex = new TextEncoder().encode(colorHex).length; // Длинна строки для SERIALIZE php
 
                 // Формирование metaValues
                 const metaValues = [
@@ -546,7 +703,7 @@ async function createTeam(teamInfo) {
 
                     [postID, '_joomsport_team_personal', 'a:2:{s:10:"short_name";s:11:"Integration Team 1";s:11:"middle_name";s:11:"IntegrationTeam1";}'],
                     [postID, '_joomsport_team_about', ''],
-                    [postID, '_joomsport_team_ef', 'a:5:{i:20;s:0:"";i:23;s:0:"";i:29;s:0:"";i:32;s:' + lengthTeamName + ':"' + integrationTeamName + '";i:33;s:' + lengthTeamName + ':"' + integrationTeamName + '";}'],
+                    [postID, '_joomsport_team_ef', 'a:5:{i:20;s:' + lengthColorHex + ':"' + colorHex +'";i:23;s:0:"";i:29;s:0:"";i:32;s:' + lengthTeamName + ':"' + integrationTeamName + '";i:33;s:' + lengthTeamName + ':"' + integrationTeamName + '";}'],
                     [postID, '_joomsport_team_venue', '0'],
 
                     [postID, 'wpbf_options', 'a:1:{i:0;s:13:"layout-global";}'],
@@ -609,17 +766,18 @@ function formatTime(seconds) {
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-function getCurrentTime(format = 'HH:mm:ss', gmtOffset = 0) {
+function getCurrentTime(format = 'HH:mm:ss', gmtOffset = 3) {
     const now = new Date();
 
-    // Получаем время в миллисекундах и применяем смещение по GMT
-    const localTimestamp = now.getTime();
-    const localOffset = now.getTimezoneOffset() * 60000; // в мс
-    const targetTime = new Date(localTimestamp + localOffset + gmtOffset * 3600000);
+    // Получаем текущее UTC время
+    const utcHours = now.getUTCHours();
+    const utcMinutes = now.getUTCMinutes();
+    const utcSeconds = now.getUTCSeconds();
 
-    const hours = String(targetTime.getHours()).padStart(2, '0');
-    const minutes = String(targetTime.getMinutes()).padStart(2, '0');
-    const seconds = String(targetTime.getSeconds()).padStart(2, '0');
+    // Применяем смещение GMT
+    const hours = String((utcHours + gmtOffset + 24) % 24).padStart(2, '0');
+    const minutes = String(utcMinutes).padStart(2, '0');
+    const seconds = String(utcSeconds).padStart(2, '0');
 
     return format
         .replace('HH', hours)
@@ -628,11 +786,29 @@ function getCurrentTime(format = 'HH:mm:ss', gmtOffset = 0) {
 }
 
 async function addEvent(matchId, eventId, eventData) {
+    const cacheUrl = process.env.SCOUT_URL + '/matchinfo/' + matchId + '.json'; // укажи свой URL
+
+    let homeId = null;
+    let awayId = null;
+
+    try {
+        const response = await axios.get(cacheUrl);
+        const data = response.data;
+
+        homeId = data.home_id;
+        awayId = data.away_id;
+    } catch (error) {
+        console.error('Ошибка получения данных матча:', error);
+        return;
+    }
+
+    const t_id = eventData.Team === 1 ? homeId : awayId;
+
     const params = {
         action: 'add_event',
         match_id: matchId,
         post_title: 'Событие из SIGNAL_R',
-        t_id: 0,
+        t_id: t_id,
         e_name: 'Событие из SIGNAL_R',
         minutes: formatTime(eventData.Time),
         stage: 0,
@@ -641,19 +817,63 @@ async function addEvent(matchId, eventId, eventData) {
         left_time: formatTime(eventData.Time),
         total_time: formatTime(eventData.Time),
         season_id: acl_ussr,
-        user_id: 2,
-        frame: 0
-    }
+        user_id: 2, // ID админа
+        frame: 0,
+        event_score_home: eventData.ScoreInfo.ScoreFull.Score1,
+        event_score_away: eventData.ScoreInfo.ScoreFull.Score2,
+    };
 
-    console.log('matchID: ' + matchId)
-    console.log('eventID: ' + eventId)
+    console.log('matchID: ' + matchId);
+    console.log('eventID: ' + eventId);
+
+    // Обновление кэша если голы
+    await updateCache(matchId, eventData);
 
     try {
-        const response = await axios.get('http://api.local/api/protocol/v3.0/index-dev2.php', { params });
+        const response = await axios.get(process.env.API_URL + '/api/protocol/v3.0/index-dev2.php', { params });
         console.log(response.data);
     } catch (error) {
         console.error('Ошибка запроса:', error);
     }
+
+    // Отправка на сокет
+    const test = [{
+        additionalTo: null,
+        assists: [],
+        e_id: eventConverter(eventId),
+        e_name: "TEST", // Вытащить название события
+        id: 38905880, // Сюда передать ID добавленного события
+        is_deleted: false,
+        minutes: formatTime(eventData.Time),
+        player: "",
+        post_title: "TEST",
+        // score: eventData.ScoreInfo.ScoreFull.Score1 + " - " + eventData.ScoreInfo.ScoreFull.Score2,
+        t_id: t_id,
+        timeevent: getCurrentTime(),
+        event_score_home: eventData.ScoreInfo.ScoreFull.Score1,
+        event_score_away: eventData.ScoreInfo.ScoreFull.Score2,
+    }]
+
+    const payload =
+        {
+            command: "add_event",
+            // data: matchData.Data, // Сюда отправить форматированную дату
+            data: test, // Сюда отправить форматированную дату
+            room: matchId,
+            socket_id: socketMap[matchId].socket_id, // можно сгенерировать случайный
+            is_scout: true
+        }
+    const payloadTwo =
+        {
+            command: "insertRecord",
+            data: test, // Сюда отправить форматированную дату
+            room: matchId,
+            socket_id: socketMap[matchId].socket_id, // можно сгенерировать случайный
+            is_scout: true
+        }
+
+    sockets[matchId].emit("add_event", payload);
+    sockets[matchId].emit("insertRecord", payloadTwo);
 }
 
 function protocolLogic() {
@@ -729,14 +949,3 @@ function eventConverter(eventId) {
     console.log('fe_id: ' + found.id)
     return found ? found.id : null;
 }
-
-
-// Фукнционал создания игровых дней привязанных к нужным сезонам   (в среду делаем)
-
-
-
-
-// Функционал получения игроков по ID из интеграции, если таких нет - создаём и привязываем к турниру !!!!!!!!!!!!!!!!
-// Функция конвертации всех событий 1x в наши события +++++++++++++
-// Отправка событий по сокету в нужном нам формате
-// Логика расчёта и отправки данных для каждого протокола
